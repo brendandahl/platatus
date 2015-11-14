@@ -180,58 +180,84 @@ function populateSpecStatus(browserData, features) {
 const bugzillaBottleneck = new Bottleneck(20);
 
 function bugzillaFetch(bugzillaUrl, options) {
+  console.log(bugzillaUrl);
   return bugzillaBottleneck.schedule(cache.readJson, bugzillaUrl, options.cacheDir);
 }
 
-function getBugzillaBugData(bugId, options) {
-  return bugzillaFetch('https://bugzilla.mozilla.org/rest/bug?id=' + bugId, options)
+function getBugzillaBugData(bugIds, options) {
+  return bugzillaFetch('https://bugzilla.mozilla.org/rest/bug?id=' + bugIds.join(','), options)
   .then((json) => {
     if (!json.bugs.length) {
       throw new Error('Bug not found(secure bug?)');
     }
-    return json.bugs[0];
+    const map = {};
+    for (const bug of json.bugs) {
+      map[bug.id] = bug;
+    }
+    for (const bugId of bugIds) {
+      if (!map[bugId]) {
+        validateWarning('Failed to get bug data for: ' + bugId);
+      }
+    }
+    return map;
   })
   .catch((reason) => {
-    validateWarning('Failed to get bug data for: ' + bugId + ': ' + reason);
+    validateWarning('Failed to get bug data for: ' + bugIds.join(',') + ': ' + reason);
     return null;
   });
 }
 
+
+
 function populateBugzillaData(features, options) {
-  return Promise.all(features.map((feature) => {
-    if (!feature.bugzilla) {
-      return null;
+  var bugIds = [];
+  for (const feature of features) {
+    if (feature.bugzilla) {
+      bugIds.push(feature.bugzilla);
+    } else {
+      validateWarning(feature.file + ': missing bugzilla id.');
     }
-    return getBugzillaBugData(feature.bugzilla, options)
-    .then((bugData) => {
+  }
+
+  return getBugzillaBugData(bugIds, options)
+  .then(function(bugs) {
+    return Promise.all(features.map((feature) => {
+      const bugData = bugs[feature.bugzilla];
       if (!bugData) {
         feature.bugzilla_status = null;
-        return null;
+        return [];
       }
       feature.bugzilla_status = bugData.status;
       feature.bugzilla_resolved_count = 0;
       if (bugData.status === 'RESOLVED') {
         feature.bugzilla_resolved_count++;
       }
-      // Check all the dependent bugs to count how many are resolved.
-      return Promise.all(bugData.depends_on.map((bugId) => {
-        return getBugzillaBugData(bugId, options);
-      }))
-      .then((dependantBugs) => {
-        // Add one to show status of the tracking bug itself.
-        feature.bugzilla_dependant_count = dependantBugs.length + 1;
-        for (const dependantBug of dependantBugs) {
-          if (!dependantBug) {
-            // Probably was secure bug.
-            continue;
-          }
-          if (dependantBug.status === 'RESOLVED') {
-            feature.bugzilla_resolved_count++;
-          }
-        }
-      });
+      return {
+        bug: bugData,
+        feature: feature
+      };
+      // // Check all the dependent bugs to count how many are resolved.
+      // return Promise.all(bugData.depends_on.map((bugId) => {
+      //   return getBugzillaBugData(bugId, options);
+      // }))
+      // .then((dependantBugs) => {
+      //   // Add one to show status of the tracking bug itself.
+      //   feature.bugzilla_dependant_count = dependantBugs.length + 1;
+      //   for (const dependantBug of dependantBugs) {
+      //     if (!dependantBug) {
+      //       // Probably was secure bug.
+      //       continue;
+      //     }
+      //     if (dependantBug.status === 'RESOLVED') {
+      //       feature.bugzilla_resolved_count++;
+      //     }
+      //   }
+      // });
+    }))
+    .map(() {
+      
     });
-  }));
+  });
 }
 
 function populateFirefoxStatus(versions, features) {
